@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Yupp.ai Ultimate GUI (v4.0 - Persistent)
+// @name         Yupp.ai Ultimate GUI (v5.0 - AutoBlur)
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  Native, stealth UI with persistent state. Press '[' to open.
+// @version      5.0
+// @description  Native UI with Auto-Blur on open. Press '[' to toggle.
 // @author       You
 // @match        https://yupp.ai/*
 // @grant        none
@@ -14,27 +14,20 @@
     // --- CONFIGURATION ---
     const TRIGGER_KEY = '[';
     const UI_ID = 'yupp-ultimate-gui';
-    const STORAGE_KEY = 'yupp_gui_state_v1';
+    const STORAGE_KEY = 'yupp_gui_state_v2'; // Bumped version for clean state
 
     // --- STATE ---
     let isBuilt = false;
     let isVisible = false;
 
-    // --- DEFINITIONS: VISUAL FEATURES ---
-    // We define logic here so we can loop through it for saving/loading
+    // --- DEFINITIONS: PERSISTENT FEATURES ---
+    // Note: Blur is removed from here because it is now automatic based on UI state
     const FEATURE_MAP = {
         'feat-wide': {
             label: 'Wide Mode',
             action: (on) => {
                 const box = document.querySelector('.max-w-prompt-box');
                 if(box) box.style.maxWidth = on ? '100%' : '';
-            }
-        },
-        'feat-blur': {
-            label: 'Privacy Blur',
-            action: (on) => {
-                const main = document.querySelector('main');
-                if(main) main.style.filter = on ? 'blur(8px)' : '';
             }
         },
         'feat-sidebar': {
@@ -108,15 +101,38 @@
         }
     });
 
+    // --- 2. TOGGLE LOGIC (Handles Visibility + Blur) ---
     function toggleUI() {
         const el = document.getElementById(UI_ID);
+        // Try to find the main content area to blur
+        const mainContent = document.querySelector('main') || document.querySelector('#main-content') || document.body;
+
         isVisible = !isVisible;
-        el.style.opacity = isVisible ? '1' : '0';
-        el.style.transform = isVisible ? 'translate(-50%, -50%) scale(1)' : 'translate(-50%, -45%) scale(0.95)';
-        el.style.pointerEvents = isVisible ? 'auto' : 'none';
+
+        if (isVisible) {
+            // SHOW GUI
+            el.style.opacity = '1';
+            el.style.transform = 'translate(-50%, -50%) scale(1)';
+            el.style.pointerEvents = 'auto';
+
+            // ENABLE BACKGROUND BLUR
+            // We apply transition to the blur for a smooth effect
+            mainContent.style.transition = 'filter 0.2s ease-out';
+            mainContent.style.filter = 'blur(10px) brightness(0.8)';
+        } else {
+            // HIDE GUI
+            el.style.opacity = '0';
+            el.style.transform = 'translate(-50%, -45%) scale(0.95)';
+            el.style.pointerEvents = 'none';
+
+            // DISABLE BACKGROUND BLUR
+            mainContent.style.filter = '';
+            // Clean up transition after it finishes so it doesn't mess with other site animations
+            setTimeout(() => { mainContent.style.transition = ''; }, 200);
+        }
     }
 
-    // --- 2. STORAGE HELPERS ---
+    // --- 3. STORAGE HELPERS ---
     function getSavedState() {
         try {
             return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
@@ -135,7 +151,7 @@
         location.reload();
     }
 
-    // --- 3. UI BUILDER ---
+    // --- 4. UI BUILDER ---
     function buildUI() {
         const savedState = getSavedState();
 
@@ -153,13 +169,13 @@
                 box-shadow: var(--shadow-surface-l2);
                 color: var(--color-text-primary);
                 font-family: var(--font-inter), sans-serif;
-                backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+                /* Note: We removed backdrop-filter here so the GUI stands out against the blurred background */
                 display: flex; flex-direction: column; overflow: hidden;
             }
             .y-head { padding: 16px 20px; border-bottom: 1px solid var(--color-border); display: flex; justify-content: space-between; align-items: center; }
             .y-title { font-family: var(--font-poly-sans); font-size: 1.1rem; font-weight: 600; display: flex; gap: 8px; align-items: center; }
             .y-dot { width: 8px; height: 8px; background: var(--color-brand-orange); border-radius: 50%; box-shadow: 0 0 8px var(--color-brand-orange); }
-            
+
             .y-tabs { display: flex; gap: 4px; padding: 8px 16px; background: var(--color-surface-200); }
             .y-tab-btn {
                 flex: 1; padding: 6px; border-radius: 6px; border: none; background: transparent;
@@ -171,7 +187,7 @@
             .y-content { flex: 1; padding: 16px; overflow-y: auto; }
             .y-page { display: none; animation: fadeIn 0.2s; }
             .y-page.active { display: block; }
-            
+
             .y-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
             .y-btn {
                 padding: 10px; border-radius: 12px; border: 1px solid var(--color-border);
@@ -196,9 +212,9 @@
         gui.innerHTML = `
             <div class="y-head">
                 <div class="y-title"><div class="y-dot"></div> Yupp Ultimate</div>
-                <div style="font-size:0.7rem; opacity:0.5">v4.0</div>
+                <div style="font-size:0.7rem; opacity:0.5">v5.0</div>
             </div>
-            
+
             <div class="y-tabs">
                 <button class="y-tab-btn active" onclick="window.ySwitch('visual', this)">Visual</button>
                 <button class="y-tab-btn" onclick="window.ySwitch('system', this)">System</button>
@@ -224,42 +240,38 @@
                 <div id="tab-docs" class="y-page">
                      <div class="y-code">
                         <strong>// Documentation</strong><br>
-                        Stealth mode active. State is persisted in localStorage.<br><br>
-                        <strong>Persistence:</strong><br>
-                        Features enabled here are saved to <code>${STORAGE_KEY}</code>.<br>
-                        They are re-applied automatically the next time you press <code>[</code>.<br><br>
-                        <strong>Targeting:</strong><br>
-                        Uses Yupp's native variables: <code>var(--color-surface-*)</code>.<br>
-                        Matches Dark/Light mode automatically.
+                        <strong>Auto Blur:</strong> The background automatically blurs when this panel is open and unblurs when closed.<br><br>
+                        <strong>Persistence:</strong> Features toggled in the Visual tab are saved to <code>localStorage</code> and re-applied on load.<br><br>
+                        <strong>Keybind:</strong> [ (Open Bracket)<br>
                     </div>
                 </div>
             </div>
         `;
         document.body.appendChild(gui);
 
-        // --- 4. DYNAMIC BUTTON GENERATION & STATE RESTORATION ---
+        // --- 5. DYNAMIC BUTTON GENERATION & STATE RESTORATION ---
         const grid = document.getElementById('y-visual-grid');
-        
+
         Object.keys(FEATURE_MAP).forEach(key => {
             const feat = FEATURE_MAP[key];
             const btn = document.createElement('button');
             btn.className = 'y-btn';
             btn.id = key;
-            
+
             // Check if this feature was enabled previously
             const isEnabled = savedState[key] === true;
-            
+
             // Apply visual state to button
             if (isEnabled) btn.classList.add('on');
-            
+
             // Create inner HTML
             btn.innerHTML = `${feat.label} <small>${isEnabled ? 'ON' : 'OFF'}</small>`;
-            
+
             // Attach click handler
             btn.onclick = () => {
                 const nowOn = btn.classList.toggle('on');
                 btn.querySelector('small').innerText = nowOn ? 'ON' : 'OFF';
-                
+
                 // Run Logic
                 feat.action(nowOn);
                 // Save State
