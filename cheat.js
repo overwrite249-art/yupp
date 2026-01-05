@@ -236,7 +236,7 @@ async function fetchStealthPrompt() {
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     'model': 'openai/gpt-oss-120b',
-                    'messages': [{ 'role': 'user', 'content': 'Generate a creative prompt.' }],
+                    'messages': [{ 'role': 'user', 'content': 'Generate a single creative image generation prompt. Output ONLY the prompt text, no quotes. Start with generate me an image of' }],
                     'stream': false
                 })
             });
