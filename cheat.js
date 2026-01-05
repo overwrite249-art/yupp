@@ -15,7 +15,7 @@
     'use strict';
 
     // --- CONFIGURATION ---
-    const TRIGGER_KEY = '[';
+    const TRIGGER_KEY = 'Insert';
     const UI_ID = 'yupp-ultimate-gui';
     const NOTIF_ID = 'yupp-toast-notif';
     const STORAGE_KEY = 'yupp_gui_state_v6';
