@@ -293,7 +293,38 @@ async function fetchStealthPrompt(isBot = false) {
     let contentPrompt = 'Generate a single creative image generation prompt. Output ONLY the prompt text, no quotes. Start with generate me an image of';
 
     if (isBot) {
-        const themes = ["neon fruits", "gold houses", "tree cities", "cyberpunk street", "crystal palace", "underwater temple"];
+        const themes = [
+  "bioluminescent mycelium forest",
+  "liquid chrome samurai",
+  "shattering obsidian palace",
+  "steampunk clockwork heart",
+  "ancient overgrown cyborg",
+  "iridescent opal dragon",
+  "cosmic nebula phoenix",
+  "submerged gothic cathedral",
+  "volcanic glass citadel",
+  "fractal geometry desert",
+  "celestial gold cartography",
+  "cyberpunk rain shanty",
+  "voodoo neon swamp",
+  "ivory filigree labyrinth",
+  "molten diamond cavern",
+  "post-apocalyptic ballroom",
+  "ethereal cloud whale",
+  "hyper-detailed kintsugi mask",
+  "solar flare deity",
+  "frozen lightning garden",
+  "emerald jungle ruins",
+  "retro-future moon base",
+  "amber trapped prehistoric world",
+  "quantum glitch cityscape",
+  "porcelain doll workshop",
+  "iron rose garden",
+  "galactic library vortex",
+  "spectral ghost ship",
+  "alchemist neon lab",
+  "marble statue melting"
+];
         const theme = themes[Math.floor(Math.random() * themes.length)];
         const prefix = botConfig.useImage ? "generate me a picture in 4k with" : "generate me an svg of";
         contentPrompt = `Write one 4k image prompt about ${theme}. Start with "${prefix} ". No quotes.`;
