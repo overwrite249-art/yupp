@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Yupp.ai Ultimate GUI (v6.2 - Stealth Suite)
+// @name         Yupp.ai Ultimate GUI (v6.2 - Stealth Suite - Loop Fix)
 // @namespace    http://tampermonkey.net/
-// @version      6.2
+// @version      6.2.1
 // @description  Native UI with Auto-Blur, Model Unlocker, Stealth Auto-Prompter, and Auto-Farming Bot. Press '[' to open.
 // @author       You
 // @match        https://yupp.ai/*
@@ -30,7 +30,6 @@ let breakAutoPrompt = false;
 let botInterval = null;
 let isBotWorking = false;
 let botMode = "TEXT";
-let botAbortController = new AbortController();
 let botConfig = {
     publicMode: false,
     useImage: false
@@ -309,22 +308,28 @@ function realClick(el) {
     el.click();
 }
 
+// --- FIXED PUBLIC MODE HANDLER ---
 async function handlePublicMode() {
     const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
     if (!switchBtn) return;
-    realClick(switchBtn);
-    await sleep(600);
 
-    const publicRadio = Array.from(document.querySelectorAll('button[role="radio"]')).find(b => b.getAttribute('aria-label') === 'Public');
-    if (publicRadio) {
-        realClick(publicRadio);
-        await sleep(400);
-    }
-
-    const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Confirm' && b.classList.contains('bg-brand-burgundy'));
-    if (confirmBtn) {
-        realClick(confirmBtn);
+    // Only switch if it's currently private
+    if (switchBtn.textContent.includes("Private")) {
+        realClick(switchBtn);
         await sleep(600);
+
+        const publicRadio = Array.from(document.querySelectorAll('button[role="radio"]')).find(b => b.getAttribute('aria-label') === 'Public');
+        if (publicRadio) {
+            realClick(publicRadio);
+            await sleep(500);
+        }
+
+        // More robust Confirm selector
+        const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Confirm');
+        if (confirmBtn) {
+            realClick(confirmBtn);
+            await sleep(800);
+        }
     }
 }
 
@@ -351,6 +356,7 @@ async function forceScratchComplete(canvas) {
 }
 
 // --- 6. BOT LOOP ---
+// --- UPDATED BOT LOOP WITH GUARD CLAUSE FOR 2ND LOOP ---
 async function runBotLogic() {
     if (isBotWorking || !botInterval) return;
     isBotWorking = true;
@@ -361,35 +367,49 @@ async function runBotLogic() {
     try {
         // VOTING / SCRATCH PHASE
         if (botMode === "VOTING" || window.location.search.includes('stream=true')) {
-            setStatus("Handling Vote/Scratch...");
+            setStatus("Selecting All & Saving...");
 
+            // 1. Find all tag buttons
             const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
-            const fbBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes("Send feedback"));
+            tags.forEach(tag => {
+                if (tag.getAttribute('data-state') === 'off') {
+                    realClick(tag);
+                }
+            });
 
-            if (tags.length > 0 || fbBtn) {
-                let tagsToClick = tags.filter(t => t.getAttribute('data-state') === 'off');
-                tagsToClick.forEach(tag => realClick(tag));
-                if (fbBtn && !fbBtn.disabled) realClick(fbBtn);
-                isBotWorking = false; return;
+            // 2. Find and click the Save/Feedback button
+            const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
+                b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
+            );
+
+            if (fbBtn && !fbBtn.disabled) {
+                realClick(fbBtn);
+                setStatus("Feedback Saved.");
             }
 
+            // Handle Scratch Card
             const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
             if (canvas && canvas.offsetParent !== null) {
                 canvas.setAttribute('data-bot-done', 'true');
                 setStatus("Scratching...");
                 await forceScratchComplete(canvas);
-
                 await sleep(500);
-                const sidebarBtn = document.querySelector('a[href="/"] svg.lucide-message-circle')?.closest('a') || document.querySelector('a[data-sidebar="menu-button"][href="/"]');
+
+                const sidebarBtn = document.querySelector('a[href="/"] svg.lucide-message-circle')?.closest('a') ||
+                                 document.querySelector('a[data-sidebar="menu-button"][href="/"]');
                 if (sidebarBtn) {
                     realClick(sidebarBtn);
+                    setStatus("Loading New Chat...");
+                    await sleep(1500); // Wait for transition
                     botMode = "TEXT";
                 }
-                await sleep(1000);
                 isBotWorking = false; return;
             }
 
-            const prefButtons = Array.from(document.querySelectorAll('button')).filter(b => b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled);
+            // Handle "I prefer this"
+            const prefButtons = Array.from(document.querySelectorAll('button')).filter(b =>
+                b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled
+            );
             if (prefButtons.length >= 2) {
                 realClick(prefButtons[prefButtons.length - 1]);
                 await sleep(1000);
@@ -399,30 +419,45 @@ async function runBotLogic() {
 
         // TEXT PHASE
         const input = document.querySelector("[data-testid='prompt-input']");
-        if (botMode === "TEXT" && input && input.value.length < 5) {
+        if (botMode === "TEXT" && input) {
 
+            // --- CRITICAL FIX FOR 2ND LOOP ---
+            // Don't just call handlePublicMode, ensure the switch EXISTS before typing.
+            // If the switch isn't loaded yet, return and try next loop.
             if (botConfig.publicMode) {
-                setStatus("Check Public Mode...");
-                await handlePublicMode();
+                const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
+
+                if (!switchBtn) {
+                    // Button not loaded yet (New Chat still loading)
+                    setStatus("Waiting for UI Switch...");
+                    isBotWorking = false;
+                    return; // EXIT and retry next interval
+                }
+
+                if (switchBtn.textContent.includes("Private")) {
+                    setStatus("Switching to Public...");
+                    await handlePublicMode();
+                    // EXIT and verify state on next loop before typing
+                    isBotWorking = false;
+                    return;
+                }
             }
+            // --------------------------------
 
-            setStatus("Fetching Prompt...");
-            const prompt = await fetchStealthPrompt(true); // true = isBot
-
-            if (!botInterval) { isBotWorking = false; return; }
-
-            setStatus("Typing...");
-            await typeAndSend(prompt);
-
-            // Assume transition to voting
-            botMode = "VOTING";
+            if (input.value.length < 5) {
+                setStatus("Fetching Prompt...");
+                const prompt = await fetchStealthPrompt(true);
+                if (!botInterval) { isBotWorking = false; return; }
+                setStatus("Typing...");
+                await typeAndSend(prompt);
+                botMode = "VOTING";
+            }
         }
 
     } catch(e) {
         console.error("Bot Error", e);
         setStatus("Error: " + e.message);
     }
-
     isBotWorking = false;
 }
 
@@ -504,7 +539,7 @@ function buildUI() {
     gui.innerHTML = `
         <div class="y-head">
             <div class="y-title"><div class="y-dot"></div> Yupp Ultimate</div>
-            <div style="font-size:0.7rem; opacity:0.5">v6.2</div>
+            <div style="font-size:0.7rem; opacity:0.5">v6.2.1</div>
         </div>
 
         <div class="y-tabs">
@@ -516,30 +551,21 @@ function buildUI() {
         </div>
 
         <div class="y-content">
-            <!-- MAIN TAB -->
             <div id="tab-main" class="y-page active">
                 <p style="font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7">Tools</p>
-
                 <button class="y-btn special y-full-btn" id="y-unlock-btn">
                     <span>Remove Model Bans</span>
                     <small>FIX</small>
                 </button>
-
                 <button class="y-btn bot y-full-btn" id="y-autoprompt-btn">
                     <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>
                     <span>Auto prompt</span>
                     <small>1-SHOT</small>
                 </button>
-
-                <p style="font-size: 0.7rem; opacity: 0.5; line-height: 1.4; margin-top: 10px;">
-                    <strong>Auto Prompt:</strong> Fetches a creative prompt via stealth API, types it like a human, sends it, and stops. Use for quick testing.
-                </p>
             </div>
 
-            <!-- AUTOFARM TAB -->
             <div id="tab-autofarm" class="y-page">
                 <p style="font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7">AFK Farming</p>
-
                 <div class="y-grid">
                     <button class="y-btn" id="y-bot-public">
                         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
@@ -552,7 +578,6 @@ function buildUI() {
                         <small>OFF</small>
                     </button>
                 </div>
-
                 <div style="margin-top: 10px;">
                     <button class="y-btn bot y-full-btn" id="y-bot-start">
                         <svg id="y-bot-icon" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -560,20 +585,13 @@ function buildUI() {
                         <small>LOOP</small>
                     </button>
                 </div>
-
                 <div class="y-bot-status" id="y-bot-status">Status: Idle</div>
-
-                <p style="font-size: 0.7rem; opacity: 0.5; line-height: 1.4; margin-top: 10px;">
-                    <strong>AutoFarm:</strong> Fully automated loop. Fetches prompts, votes/scratches cards, handles Public Mode switching. "Use Image" makes 4k picture prompts (Not Recommended because of bans).
-                </p>
             </div>
 
-            <!-- MISC TAB -->
             <div id="tab-misc" class="y-page">
                 <div class="y-grid" id="y-misc-grid"></div>
             </div>
 
-            <!-- SYSTEM TAB -->
             <div id="tab-system" class="y-page">
                 <div class="y-grid">
                     <button class="y-btn" id="y-reload-btn">Force Reload</button>
@@ -582,7 +600,6 @@ function buildUI() {
                 </div>
             </div>
 
-            <!-- DOCS TAB -->
             <div id="tab-docs" class="y-page">
                 <div class="y-code">
                     <strong>// TECHNICAL DOCUMENTATION</strong><br><br>
@@ -592,8 +609,7 @@ function buildUI() {
                     <strong>2. Network Patching:</strong><br>
                     MITM attack on JSON responses to remove model bans.<br><br>
                     <strong>3. AutoFarm Bot:</strong><br>
-                    Integrated v5.2 Logic.<br>
-                    - Handles Scratch Card Canvas via PointerEvents (UnsafeWindow).<br>
+                    - Handles Scratch Card Canvas via PointerEvents.<br>
                     - Auto-switches to Public Mode if enabled.<br>
                     - Generates SVG or 4K Picture prompts.
                 </div>
@@ -603,7 +619,6 @@ function buildUI() {
     document.body.appendChild(gui);
 
     // --- EVENT BINDINGS ---
-
     const tabBtns = ['main', 'autofarm', 'misc', 'docs', 'system'];
     tabBtns.forEach(name => {
         document.getElementById(`btn-tab-${name}`).addEventListener('click', (e) => {
@@ -614,15 +629,12 @@ function buildUI() {
         });
     });
 
-    // Main Tools
     const unlockBtn = document.getElementById('y-unlock-btn');
     unlockBtn.addEventListener('click', () => {
         unlockBtn.classList.add('on');
-        unlockBtn.innerHTML = `<span>🔓 Patching...</span><small>...</small>`;
         applyAvailabilityUnlocker();
         setTimeout(() => {
             unlockBtn.classList.remove('on');
-            unlockBtn.innerHTML = `<span>🔓 Unlock Model Limits</span><small>FIX</small>`;
             showNotification('Network Layer Patched');
         }, 600);
     });
@@ -634,7 +646,6 @@ function buildUI() {
         showNotification('🤖 Generating Prompt...');
         autoBtn.classList.add('on');
         breakAutoPrompt = false;
-
         try {
             const prompt = await fetchStealthPrompt(false);
             if (!breakAutoPrompt) {
@@ -649,7 +660,6 @@ function buildUI() {
         }
     });
 
-    // AutoFarm Bindings
     const btnBotPublic = document.getElementById('y-bot-public');
     btnBotPublic.onclick = () => {
         botConfig.publicMode = !botConfig.publicMode;
@@ -670,48 +680,36 @@ function buildUI() {
 
     btnBotStart.onclick = () => {
         if(botInterval) {
-            // Stop Bot
             clearInterval(botInterval);
             botInterval = null;
-            botAbortController.abort();
             isBotWorking = false;
-            botMode = "TEXT";
-
             btnBotStart.classList.remove('on');
             botText.innerText = "START BOT";
-            botIcon.innerHTML = `<polygon points="5 3 19 12 5 21 5 3"></polygon>`; // Play icon
-            document.getElementById('y-bot-status').innerText = "Status: TERMINATED";
+            botIcon.innerHTML = `<polygon points="5 3 19 12 5 21 5 3"></polygon>`;
+            document.getElementById('y-bot-status').innerText = "Status: Idle";
         } else {
-            // Start Bot
             botMode = "TEXT";
             botInterval = setInterval(runBotLogic, 800);
-
             btnBotStart.classList.add('on');
-            botText.innerText = "RUNNING...";
-            botIcon.innerHTML = `<rect x="6" y="6" width="12" height="12"></rect>`; // Stop icon
-            document.getElementById('y-bot-status').innerText = "Status: Starting...";
+            botText.innerText = "STOP BOT";
+            botIcon.innerHTML = `<rect x="6" y="6" width="12" height="12"></rect>`;
         }
     };
 
-    // Misc Grid
     const grid = document.getElementById('y-misc-grid');
     Object.keys(FEATURE_MAP).forEach(key => {
         const feat = FEATURE_MAP[key];
         const btn = document.createElement('button');
         btn.className = 'y-btn';
-
         const isEnabled = savedState[key] === true;
         if(isEnabled) btn.classList.add('on');
-
         btn.innerHTML = `${feat.label} <small>${isEnabled ? 'ON' : 'OFF'}</small>`;
-
         btn.onclick = () => {
             const nowOn = btn.classList.toggle('on');
             btn.querySelector('small').innerText = nowOn ? 'ON' : 'OFF';
             feat.action(nowOn);
             saveFeatureState(key, nowOn);
         };
-
         grid.appendChild(btn);
         if(isEnabled) feat.action(true);
     });
