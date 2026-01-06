@@ -471,7 +471,7 @@ async function runBotLogic() {
                 setStatus("Scratching...");
                 await forceScratchComplete(canvas);
                 await forceScratchComplete(canvas);
-                await sleep(500);
+                await sleep(100);
 
                 const sidebarBtn = document.querySelector('a[href="/"] svg.lucide-message-circle')?.closest('a') ||
                                  document.querySelector('a[data-sidebar="menu-button"][href="/"]');
