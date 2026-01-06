@@ -1,14 +1,15 @@
 // ==UserScript==
-// @name         Yupp.ai Ultimate GUI (v6.0 - Stealth Suite)
+// @name         Yupp.ai Ultimate GUI (v6.2 - Stealth Suite)
 // @namespace    http://tampermonkey.net/
-// @version      6.1
-// @description  Native UI with Auto-Blur, Model Unlocker, and Stealth Auto-Prompter. Press '[' to open.
+// @version      6.2
+// @description  Native UI with Auto-Blur, Model Unlocker, Stealth Auto-Prompter, and Auto-Farming Bot. Press '[' to open.
 // @author       You
 // @match        https://yupp.ai/*
 // @connect      api.deepinfra.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function() {
@@ -24,6 +25,16 @@ const STORAGE_KEY = 'yupp_gui_state_v6';
 let isBuilt = false;
 let isVisible = false;
 let breakAutoPrompt = false;
+
+// --- BOT STATE ---
+let botInterval = null;
+let isBotWorking = false;
+let botMode = "TEXT";
+let botAbortController = new AbortController();
+let botConfig = {
+    publicMode: false,
+    useImage: false
+};
 
 // --- DEFINITIONS: MISC FEATURES ---
 const FEATURE_MAP = {
@@ -90,15 +101,14 @@ const FEATURE_MAP = {
     }
 };
 
-// --- 1. CORE LISTENER (FIXED) ---
+// --- 1. CORE LISTENER ---
 document.addEventListener('keydown', (e) => {
     if (e.key === TRIGGER_KEY) {
-        // Prevent typing the bracket into the input
         e.preventDefault();
         if (!isBuilt) buildUI();
         toggleUI();
     }
-}, true); // Capture phase to bypass site restrictions
+}, true);
 
 function toggleUI() {
     const el = document.getElementById(UI_ID);
@@ -191,8 +201,8 @@ function applyAvailabilityUnlocker() {
     }
 }
 
-// --- 4. STEALTH AUTO PROMPTER LOGIC ---
-function tryGMRequest() {
+// --- 4. STEALTH AUTO PROMPTER LOGIC (SINGLE USE) ---
+function tryGMRequest(contentPrompt) {
     return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
             method: 'POST',
@@ -207,7 +217,7 @@ function tryGMRequest() {
             },
             data: JSON.stringify({
                 'model': 'openai/gpt-oss-120b',
-                'messages': [{ 'role': 'user', 'content': 'Generate a single creative image generation prompt. Output ONLY the prompt text, no quotes. Start with generate me an image of' }],
+                'messages': [{ 'role': 'user', 'content': contentPrompt }],
                 'stream': false
             }),
             timeout: 8000,
@@ -225,9 +235,18 @@ function tryGMRequest() {
     });
 }
 
-async function fetchStealthPrompt() {
+async function fetchStealthPrompt(isBot = false) {
+    let contentPrompt = 'Generate a single creative image generation prompt. Output ONLY the prompt text, no quotes. Start with generate me an image of';
+
+    if (isBot) {
+        const themes = ["neon fruits", "gold houses", "tree cities", "cyberpunk street", "crystal palace", "underwater temple"];
+        const theme = themes[Math.floor(Math.random() * themes.length)];
+        const prefix = botConfig.useImage ? "generate me a picture in 4k with" : "generate me an svg of";
+        contentPrompt = `Write one 4k image prompt about ${theme}. Start with "${prefix} ". No quotes.`;
+    }
+
     try {
-        return await tryGMRequest();
+        return await tryGMRequest(contentPrompt);
     } catch (e) {
         console.warn("GM failed, falling back to fetch", e);
         try {
@@ -236,55 +255,185 @@ async function fetchStealthPrompt() {
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     'model': 'openai/gpt-oss-120b',
-                    'messages': [{ 'role': 'user', 'content': 'Generate a single creative image generation prompt. Output ONLY the prompt text, no quotes. Start with generate me an image of' }],
+                    'messages': [{ 'role': 'user', 'content': contentPrompt }],
                     'stream': false
                 })
             });
             const data = await req.json();
             return data.choices[0].message.content.trim();
         } catch(err) {
-            return "A futuristic cyberpunk city in the rain, neon lights, 4k render";
+            return botConfig.useImage ? "generate me a picture in 4k with a futuristic cyberpunk city" : "generate me an svg of a futuristic cyberpunk city";
         }
     }
 }
 
 async function typeAndSend(text) {
     const input = document.querySelector("[data-testid='prompt-input']");
-    if (!input) {
-        showNotification('❌ Chat input not found');
-        return;
-    }
+    if (!input) return;
 
     input.focus();
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
     let str = "";
 
+    // Fast typing for bot, human for single use
+    const speed = botInterval ? 2 : (Math.floor(Math.random() * 10) + 5);
+
     for(let char of text) {
-        if(breakAutoPrompt) return;
+        if(breakAutoPrompt && !botInterval) return;
         str += char;
         setter.call(input, str);
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        await sleep(Math.floor(Math.random() * 10) + 5);
+        await sleep(speed);
     }
 
-    if(breakAutoPrompt) return;
-    await sleep(600);
+    await sleep(botInterval ? 200 : 600);
 
     const sendBtn = document.querySelector('button[type="submit"]');
     if (sendBtn) {
         sendBtn.click();
-        showNotification('✅ Prompt Sent');
+        if(!botInterval) showNotification('✅ Prompt Sent');
     }
 }
 
-// --- 5. UI BUILDER ---
+// --- 5. BOT HELPERS (FIXED WITH UNSAFEWINDOW) ---
+function getNativeWindow() {
+    return (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+}
+
+function realClick(el) {
+    if (!el) return;
+    const win = getNativeWindow();
+    const opts = { bubbles: true, cancelable: true, view: win, buttons: 1 };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.click();
+}
+
+async function handlePublicMode() {
+    const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
+    if (!switchBtn) return;
+    realClick(switchBtn);
+    await sleep(600);
+
+    const publicRadio = Array.from(document.querySelectorAll('button[role="radio"]')).find(b => b.getAttribute('aria-label') === 'Public');
+    if (publicRadio) {
+        realClick(publicRadio);
+        await sleep(400);
+    }
+
+    const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Confirm' && b.classList.contains('bg-brand-burgundy'));
+    if (confirmBtn) {
+        realClick(confirmBtn);
+        await sleep(600);
+    }
+}
+
+async function forceScratchComplete(canvas) {
+    const win = getNativeWindow();
+    const rect = canvas.getBoundingClientRect();
+    const centerX = rect.left + (rect.width / 2);
+    const centerY = rect.top + (rect.height / 2);
+    try {
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } catch (e) {}
+
+    const eventOpts = { bubbles: true, clientX: centerX, clientY: centerY, pointerType: 'mouse', buttons: 1, view: win };
+    canvas.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
+    canvas.dispatchEvent(new MouseEvent('mousedown', eventOpts));
+
+    // Simulate movement
+    const moveOpts = { ...eventOpts, clientX: centerX + 5, clientY: centerY + 5 };
+    canvas.dispatchEvent(new PointerEvent('pointermove', moveOpts));
+    canvas.dispatchEvent(new PointerEvent('pointerup', moveOpts));
+    canvas.dispatchEvent(new MouseEvent('mouseup', moveOpts));
+    canvas.click();
+}
+
+// --- 6. BOT LOOP ---
+async function runBotLogic() {
+    if (isBotWorking || !botInterval) return;
+    isBotWorking = true;
+
+    const statusEl = document.getElementById('y-bot-status');
+    const setStatus = (txt) => { if(statusEl) statusEl.innerText = txt; };
+
+    try {
+        // VOTING / SCRATCH PHASE
+        if (botMode === "VOTING" || window.location.search.includes('stream=true')) {
+            setStatus("Handling Vote/Scratch...");
+
+            const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
+            const fbBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes("Send feedback"));
+
+            if (tags.length > 0 || fbBtn) {
+                let tagsToClick = tags.filter(t => t.getAttribute('data-state') === 'off');
+                tagsToClick.forEach(tag => realClick(tag));
+                if (fbBtn && !fbBtn.disabled) realClick(fbBtn);
+                isBotWorking = false; return;
+            }
+
+            const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
+            if (canvas && canvas.offsetParent !== null) {
+                canvas.setAttribute('data-bot-done', 'true');
+                setStatus("Scratching...");
+                await forceScratchComplete(canvas);
+
+                await sleep(500);
+                const sidebarBtn = document.querySelector('a[href="/"] svg.lucide-message-circle')?.closest('a') || document.querySelector('a[data-sidebar="menu-button"][href="/"]');
+                if (sidebarBtn) {
+                    realClick(sidebarBtn);
+                    botMode = "TEXT";
+                }
+                await sleep(1000);
+                isBotWorking = false; return;
+            }
+
+            const prefButtons = Array.from(document.querySelectorAll('button')).filter(b => b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled);
+            if (prefButtons.length >= 2) {
+                realClick(prefButtons[prefButtons.length - 1]);
+                await sleep(1000);
+            }
+            isBotWorking = false; return;
+        }
+
+        // TEXT PHASE
+        const input = document.querySelector("[data-testid='prompt-input']");
+        if (botMode === "TEXT" && input && input.value.length < 5) {
+
+            if (botConfig.publicMode) {
+                setStatus("Check Public Mode...");
+                await handlePublicMode();
+            }
+
+            setStatus("Fetching Prompt...");
+            const prompt = await fetchStealthPrompt(true); // true = isBot
+
+            if (!botInterval) { isBotWorking = false; return; }
+
+            setStatus("Typing...");
+            await typeAndSend(prompt);
+
+            // Assume transition to voting
+            botMode = "VOTING";
+        }
+
+    } catch(e) {
+        console.error("Bot Error", e);
+        setStatus("Error: " + e.message);
+    }
+
+    isBotWorking = false;
+}
+
+// --- 7. UI BUILDER ---
 function buildUI() {
     const savedState = getSavedState();
 
     const style = document.createElement('style');
     style.innerHTML = `
         #${UI_ID} {
-            position: fixed; top: 50%; left: 50%; width: 500px; height: 480px;
+            position: fixed; top: 50%; left: 50%; width: 500px; height: 520px;
             transform: translate(-50%, -45%) scale(0.95); opacity: 0;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             z-index: 99999; pointer-events: none;
@@ -300,10 +449,10 @@ function buildUI() {
         .y-title { font-size: 1.1rem; font-weight: 600; display: flex; gap: 8px; align-items: center; font-family: var(--font-poly-sans); }
         .y-dot { width: 8px; height: 8px; background: var(--color-brand-orange); border-radius: 50%; box-shadow: 0 0 8px var(--color-brand-orange); }
 
-        .y-tabs { display: flex; gap: 4px; padding: 8px 16px; background: var(--color-surface-200); }
+        .y-tabs { display: flex; gap: 4px; padding: 8px 16px; background: var(--color-surface-200); flex-wrap: wrap; }
         .y-tab-btn {
             flex: 1; padding: 8px; border-radius: 6px; border: none; background: transparent;
-            color: var(--color-text-secondary); font-size: 0.85rem; cursor: pointer; transition: 0.2s;
+            color: var(--color-text-secondary); font-size: 0.85rem; cursor: pointer; transition: 0.2s; min-width: 60px;
         }
         .y-tab-btn:hover { background: var(--color-element-hover); color: var(--color-text-primary); }
         .y-tab-btn.active { background: var(--color-element); color: var(--color-text-primary); font-weight: 600; box-shadow: 0 1px 2px #00000010; }
@@ -324,17 +473,18 @@ function buildUI() {
         .y-btn:hover { background: var(--color-element-hover); border-color: var(--color-text-secondary); }
         .y-btn.on { background: var(--color-brand-orange); color: white; border-color: transparent; }
         .y-btn small { opacity: 0.6; font-size: 0.7em; margin-left: auto; }
+        .y-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
 
         .y-btn.special { border: 1px solid var(--color-brand-orange); background: rgba(255, 165, 0, 0.05); }
         .y-btn.special:hover { background: var(--color-brand-orange); color: white; }
 
         .y-btn.bot { border: 1px solid #00e5ff; background: rgba(0, 229, 255, 0.05); color: #00e5ff; }
         .y-btn.bot:hover { background: #00e5ff; color: #000; }
-        .y-btn.bot svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
 
         .y-btn.danger { color: var(--color-destructive); border-color: var(--color-destructive); opacity: 0.8; }
         .y-btn.danger:hover { background: var(--color-destructive); color: white; opacity: 1; }
 
+        .y-bot-status { margin-top: 10px; font-size: 0.75rem; text-align: center; color: var(--color-text-secondary); font-family: var(--font-mono); }
         .y-code { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-secondary); line-height: 1.5; background: var(--color-surface-100); padding: 10px; border-radius: 8px; border: 1px solid var(--color-border); }
 
         #${NOTIF_ID} {
@@ -354,11 +504,12 @@ function buildUI() {
     gui.innerHTML = `
         <div class="y-head">
             <div class="y-title"><div class="y-dot"></div> Yupp Ultimate</div>
-            <div style="font-size:0.7rem; opacity:0.5">v6.0</div>
+            <div style="font-size:0.7rem; opacity:0.5">v6.2</div>
         </div>
 
         <div class="y-tabs">
             <button class="y-tab-btn active" id="btn-tab-main">Main</button>
+            <button class="y-tab-btn" id="btn-tab-autofarm">AutoFarm</button>
             <button class="y-tab-btn" id="btn-tab-misc">Misc</button>
             <button class="y-tab-btn" id="btn-tab-docs">Docs</button>
             <button class="y-tab-btn" id="btn-tab-system">System</button>
@@ -385,6 +536,38 @@ function buildUI() {
                 </p>
             </div>
 
+            <!-- AUTOFARM TAB -->
+            <div id="tab-autofarm" class="y-page">
+                <p style="font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7">AFK Farming</p>
+
+                <div class="y-grid">
+                    <button class="y-btn" id="y-bot-public">
+                        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <span>Public Mode</span>
+                        <small>OFF</small>
+                    </button>
+                    <button class="y-btn" id="y-bot-image">
+                        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                        <span>Use Image</span>
+                        <small>OFF</small>
+                    </button>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <button class="y-btn bot y-full-btn" id="y-bot-start">
+                        <svg id="y-bot-icon" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        <span id="y-bot-text">START BOT</span>
+                        <small>LOOP</small>
+                    </button>
+                </div>
+
+                <div class="y-bot-status" id="y-bot-status">Status: Idle</div>
+
+                <p style="font-size: 0.7rem; opacity: 0.5; line-height: 1.4; margin-top: 10px;">
+                    <strong>AutoFarm:</strong> Fully automated loop. Fetches prompts, votes/scratches cards, handles Public Mode switching. "Use Image" makes 4k picture prompts (Not Recommended because of bans).
+                </p>
+            </div>
+
             <!-- MISC TAB -->
             <div id="tab-misc" class="y-page">
                 <div class="y-grid" id="y-misc-grid"></div>
@@ -399,21 +582,20 @@ function buildUI() {
                 </div>
             </div>
 
-            <!-- DOCS TAB (FOR AI) -->
+            <!-- DOCS TAB -->
             <div id="tab-docs" class="y-page">
                 <div class="y-code">
                     <strong>// TECHNICAL DOCUMENTATION</strong><br><br>
                     <strong>1. Auto-Prompter (Stealth):</strong><br>
-                    Uses <code>GM_xmlhttpRequest</code> to bypass CORS/Network monitoring.<br>
-                    Injects text via <code>React value setter</code> + <code>input event</code>.<br>
-                    Simulates human typing delays (5-15ms var).<br><br>
-                    <strong>2. Network Patching (Unlocker):</strong><br>
-                    Overrides <code>window.fetch</code> and <code>XMLHttpRequest</code>.<br>
-                    MITM attack on JSON responses: converts <code>"isUnavailableForUser":true</code> to <code>false</code> on the fly.<br><br>
-                    <strong>3. CSS Variable Hooks:</strong><br>
-                    Consumes native <code>var(--color-surface-300)</code> for seamless theming.<br><br>
-                    <strong>4. Tab System:</strong><br>
-                    Uses JS class switching with <code>display: block !important</code> to prevent site CSS conflicts.
+                    Uses <code>GM_xmlhttpRequest</code> to bypass CORS.<br>
+                    Injects text via React value setter.<br><br>
+                    <strong>2. Network Patching:</strong><br>
+                    MITM attack on JSON responses to remove model bans.<br><br>
+                    <strong>3. AutoFarm Bot:</strong><br>
+                    Integrated v5.2 Logic.<br>
+                    - Handles Scratch Card Canvas via PointerEvents (UnsafeWindow).<br>
+                    - Auto-switches to Public Mode if enabled.<br>
+                    - Generates SVG or 4K Picture prompts.
                 </div>
             </div>
         </div>
@@ -422,7 +604,7 @@ function buildUI() {
 
     // --- EVENT BINDINGS ---
 
-    const tabBtns = ['main', 'misc', 'docs', 'system'];
+    const tabBtns = ['main', 'autofarm', 'misc', 'docs', 'system'];
     tabBtns.forEach(name => {
         document.getElementById(`btn-tab-${name}`).addEventListener('click', (e) => {
             document.querySelectorAll('.y-tab-btn').forEach(b => b.classList.remove('active'));
@@ -432,6 +614,7 @@ function buildUI() {
         });
     });
 
+    // Main Tools
     const unlockBtn = document.getElementById('y-unlock-btn');
     unlockBtn.addEventListener('click', () => {
         unlockBtn.classList.add('on');
@@ -444,23 +627,17 @@ function buildUI() {
         }, 600);
     });
 
-    // --- UPDATED AUTO-PROMPT LOGIC ---
     const autoBtn = document.getElementById('y-autoprompt-btn');
     autoBtn.addEventListener('click', async () => {
         if(autoBtn.classList.contains('on')) return;
-
-        // NEW: Close UI immediately and notify
         toggleUI();
         showNotification('🤖 Generating Prompt...');
-
         autoBtn.classList.add('on');
         breakAutoPrompt = false;
 
         try {
-            const prompt = await fetchStealthPrompt();
-
+            const prompt = await fetchStealthPrompt(false);
             if (!breakAutoPrompt) {
-                // NEW: Background notification for typing phase
                 showNotification('⌨️ Typing...');
                 await typeAndSend(prompt);
             }
@@ -472,6 +649,51 @@ function buildUI() {
         }
     });
 
+    // AutoFarm Bindings
+    const btnBotPublic = document.getElementById('y-bot-public');
+    btnBotPublic.onclick = () => {
+        botConfig.publicMode = !botConfig.publicMode;
+        btnBotPublic.classList.toggle('on', botConfig.publicMode);
+        btnBotPublic.querySelector('small').innerText = botConfig.publicMode ? 'ON' : 'OFF';
+    };
+
+    const btnBotImage = document.getElementById('y-bot-image');
+    btnBotImage.onclick = () => {
+        botConfig.useImage = !botConfig.useImage;
+        btnBotImage.classList.toggle('on', botConfig.useImage);
+        btnBotImage.querySelector('small').innerText = botConfig.useImage ? 'ON' : 'OFF';
+    };
+
+    const btnBotStart = document.getElementById('y-bot-start');
+    const botIcon = document.getElementById('y-bot-icon');
+    const botText = document.getElementById('y-bot-text');
+
+    btnBotStart.onclick = () => {
+        if(botInterval) {
+            // Stop Bot
+            clearInterval(botInterval);
+            botInterval = null;
+            botAbortController.abort();
+            isBotWorking = false;
+            botMode = "TEXT";
+
+            btnBotStart.classList.remove('on');
+            botText.innerText = "START BOT";
+            botIcon.innerHTML = `<polygon points="5 3 19 12 5 21 5 3"></polygon>`; // Play icon
+            document.getElementById('y-bot-status').innerText = "Status: TERMINATED";
+        } else {
+            // Start Bot
+            botMode = "TEXT";
+            botInterval = setInterval(runBotLogic, 800);
+
+            btnBotStart.classList.add('on');
+            botText.innerText = "RUNNING...";
+            botIcon.innerHTML = `<rect x="6" y="6" width="12" height="12"></rect>`; // Stop icon
+            document.getElementById('y-bot-status').innerText = "Status: Starting...";
+        }
+    };
+
+    // Misc Grid
     const grid = document.getElementById('y-misc-grid');
     Object.keys(FEATURE_MAP).forEach(key => {
         const feat = FEATURE_MAP[key];
