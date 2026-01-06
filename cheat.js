@@ -443,88 +443,78 @@ async function runBotLogic() {
     isBotWorking = true;
 
     const statusEl = document.getElementById('y-bot-status');
-    const setStatus = (txt) => { if(statusEl) statusEl.innerText = txt; };
+    const setStatus = (txt) => { if (statusEl) statusEl.innerText = txt; };
 
     try {
         if (botMode === "VOTING" || window.location.search.includes('stream=true')) {
-            setStatus("Selecting All & Saving...");
+            setStatus("Fast Voting...");
 
-            const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
-            tags.forEach(tag => {
-                if (tag.getAttribute('data-state') === 'off') {
-                    realClick(tag);
+            // 1. SELECT ALL TAGS (Instant)
+            // Finds all buttons with the radix-collection-item attribute that are currently 'off'
+            const tags = document.querySelectorAll('button[data-radix-collection-item][data-state="off"]');
+            tags.forEach(tag => realClick(tag));
+
+            // 2. HIGH-SPEED POLLING FOR SEND BUTTON
+            // The button is 'disabled' until tags are clicked. We check every 100ms.
+            let clicked = false;
+            for (let i = 0; i < 20; i++) { // Max 2 seconds total wait
+                const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
+                    b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
+                );
+
+                if (fbBtn && !fbBtn.disabled) {
+                    realClick(fbBtn);
+                    setStatus("Feedback Sent!");
+                    clicked = true;
+                    break; 
                 }
-            });
-
-            const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
-                b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
-            );
-
-            if (fbBtn && !fbBtn.disabled) {
-                realClick(fbBtn);
-                setStatus("Feedback Saved.");
+                await new Promise(r => setTimeout(r, 100)); // 100ms tick
             }
 
+            if (!clicked) {
+                console.log("Send button never became active.");
+            }
+
+            // 3. SCRATCH CARD LOGIC
             const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
             if (canvas && canvas.offsetParent !== null) {
                 canvas.setAttribute('data-bot-done', 'true');
                 setStatus("Scratching...");
+                
+                // Double call to ensure completion
                 await forceScratchComplete(canvas);
                 await forceScratchComplete(canvas);
-                await sleep(2000);
+                
+                await sleep(1500); // Wait for animation
 
+                // 4. RESET TO NEW CHAT
                 const sidebarBtn = document.querySelector('a[href="/"] svg.lucide-message-circle')?.closest('a') ||
                                  document.querySelector('a[data-sidebar="menu-button"][href="/"]');
                 if (sidebarBtn) {
                     realClick(sidebarBtn);
-                    setStatus("Loading New Chat...");
-                    await sleep(1500);
+                    setStatus("Refreshing...");
+                    await sleep(1000);
                     botMode = "TEXT";
                 }
-                isBotWorking = false; return;
+                isBotWorking = false; 
+                return;
             }
 
+            // 5. PREFER BUTTON (Fallback if no scratch card)
             const prefButtons = Array.from(document.querySelectorAll('button')).filter(b =>
                 b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled
             );
             if (prefButtons.length >= 2) {
                 realClick(prefButtons[prefButtons.length - 1]);
-                await sleep(1000);
-            }
-            isBotWorking = false; return;
-        }
-
-        const input = document.querySelector("[data-testid='prompt-input']");
-        if (botMode === "TEXT" && input) {
-            if (botConfig.publicMode) {
-                const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
-                if (!switchBtn) {
-                    setStatus("Waiting for UI Switch...");
-                    isBotWorking = false;
-                    return;
-                }
-                if (switchBtn.textContent.includes("Private")) {
-                    setStatus("Switching to Public...");
-                    await handlePublicMode();
-                    isBotWorking = false;
-                    return;
-                }
-            }
-
-            if (input.value.length < 5) {
-                setStatus("Fetching Prompt...");
-                const prompt = await fetchStealthPrompt(true);
-                if (!botInterval) { isBotWorking = false; return; }
-                setStatus("Typing...");
-                await typeAndSend(prompt);
-                botMode = "VOTING";
+                await sleep(800);
             }
         }
-    } catch(e) {
-        console.error("Bot Error", e);
-        setStatus("Error: " + e.message);
+    } catch (e) {
+        console.error("Bot Logic Error:", e);
+        setStatus("Error!");
+    } finally {
+        isBotWorking = false;
     }
-    isBotWorking = false;
 }
 
 // --- 7. UI BUILDER ---
