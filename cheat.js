@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Yupp.ai Ultimate GUI (v6.2 - Stealth Suite - Loop Fix)
+// @name         Yupp.ai Ultimate GUI (v6.4 - Auto-Reload Unlocker)
 // @namespace    http://tampermonkey.net/
-// @version      6.2.1
-// @description  Native UI with Auto-Blur, Model Unlocker, Stealth Auto-Prompter, and Auto-Farming Bot. Press '[' to open.
+// @version      6.4.0
+// @description  Native UI with Auto-Blur, Model Unlocker (Auto-Reload), Stealth Auto-Prompter, and Auto-Farming Bot. Press '[' to open.
 // @author       You
 // @match        https://yupp.ai/*
 // @connect      api.deepinfra.com
@@ -10,6 +10,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
+// @run-at       document-start
 // ==/UserScript==
 
 (function() {
@@ -20,6 +21,7 @@ const TRIGGER_KEY = '[';
 const UI_ID = 'yupp-ultimate-gui';
 const NOTIF_ID = 'yupp-toast-notif';
 const STORAGE_KEY = 'yupp_gui_state_v6';
+const UNLOCK_KEY = 'yupp_unlock_active';
 
 // --- STATE ---
 let isBuilt = false;
@@ -100,17 +102,110 @@ const FEATURE_MAP = {
     }
 };
 
+// --- 0. CRITICAL STARTUP: UNIVERSAL UNLOCKER ---
+// This runs immediately due to @run-at document-start
+if (localStorage.getItem(UNLOCK_KEY) === 'true') {
+    runUniversalUnlocker(true);
+}
+
+function runUniversalUnlocker(isLooping) {
+    console.log("🔓 Yupp Unlocker: Hooks Applied");
+
+    // 1. Patch JSON.parse (Catches data embedded in page load)
+    const originalParse = JSON.parse;
+    JSON.parse = function(text, reviver) {
+        if (typeof text === 'string' && text.includes('isUnavailableForUser":true')) {
+            text = text.replace(/"isUnavailableForUser":\s*true/g, '"isUnavailableForUser":false');
+        }
+        return originalParse.call(this, text, reviver);
+    };
+
+    // 2. Patch Fetch (Catches dynamic requests)
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const contentType = response.headers ? (response.headers.get("content-type") || "") : "";
+        if (contentType.includes("javascript") || contentType.includes("json")) {
+            const clone = response.clone();
+            try {
+                const text = await clone.text();
+                if (text.includes('isUnavailableForUser')) {
+                    const modifiedText = text.replace(/"isUnavailableForUser":\s*true/g, '"isUnavailableForUser":false');
+                    return new Response(modifiedText, {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
+                }
+            } catch(e) {}
+        }
+        return response;
+    };
+
+    // 3. Patch XHR (Legacy requests)
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function() {
+        this.addEventListener('readystatechange', function() {
+            if (this.readyState === 4 && this.responseText) {
+                try {
+                    if (this.responseText.includes('isUnavailableForUser":true')) {
+                        const modified = this.responseText.replace(/"isUnavailableForUser":\s*true/g, '"isUnavailableForUser":false');
+                        Object.defineProperty(this, 'responseText', { value: modified });
+                        Object.defineProperty(this, 'response', { value: modified });
+                    }
+                } catch (e) {}
+            }
+        });
+        originalOpen.apply(this, arguments);
+    };
+
+    // 4. THE 20-SECOND LOOP (Aggressive UI Fixer)
+    if (isLooping) {
+        console.log("🔓 Yupp Unlocker: Starting 20s Clean-up Loop");
+        const startTime = Date.now();
+        const interval = setInterval(() => {
+            if (Date.now() - startTime > 20000) {
+                clearInterval(interval);
+                console.log("🔓 Yupp Unlocker: Loop Finished");
+                return;
+            }
+
+            // Force enable buttons that might have been disabled by React hydration
+            const disabledBtns = document.querySelectorAll('button[disabled]');
+            disabledBtns.forEach(btn => {
+                if (btn.innerText.includes("Send") || btn.querySelector('svg')) {
+                    btn.disabled = false;
+                    btn.classList.remove('disabled:cursor-not-allowed');
+                }
+            });
+        }, 100); // Check every 100ms
+    }
+}
+
 // --- 1. CORE LISTENER ---
 document.addEventListener('keydown', (e) => {
     if (e.key === TRIGGER_KEY) {
         e.preventDefault();
-        if (!isBuilt) buildUI();
-        toggleUI();
+        if (!isBuilt) {
+            // Wait for body if called too early
+            if (!document.body) {
+                document.addEventListener('DOMContentLoaded', () => {
+                    if(!isBuilt) buildUI();
+                    toggleUI();
+                });
+            } else {
+                buildUI();
+                toggleUI();
+            }
+        } else {
+            toggleUI();
+        }
     }
 }, true);
 
 function toggleUI() {
     const el = document.getElementById(UI_ID);
+    if (!el) return;
     const mainContent = document.querySelector('main') || document.body;
 
     isVisible = !isVisible;
@@ -130,6 +225,7 @@ function toggleUI() {
 }
 
 function showNotification(msg) {
+    if (!document.body) return;
     let notif = document.getElementById(NOTIF_ID);
     if(!notif) {
         notif = document.createElement('div');
@@ -154,53 +250,12 @@ function saveFeatureState(id, isOn) {
 }
 function clearStorage() {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(UNLOCK_KEY);
     showNotification('Config reset. Reloading...');
     setTimeout(() => location.reload(), 1000);
 }
 
-// --- 3. UNLOCKER LOGIC ---
-function applyAvailabilityUnlocker() {
-    const originalFetch = window.fetch;
-    window.fetch = async (...args) => {
-        const response = await originalFetch(...args);
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("json")) {
-            const clone = response.clone();
-            const text = await clone.text();
-            if (text.includes('isUnavailableForUser')) {
-                const modifiedText = text.replace(/"isUnavailableForUser":\s*true/g, '"isUnavailableForUser":false');
-                return new Response(modifiedText, {
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers
-                });
-            }
-        }
-        return response;
-    };
-
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function() {
-        this.addEventListener('readystatechange', function() {
-            if (this.readyState === 4 && this.responseText) {
-                if (this.responseText.includes('isUnavailableForUser":true')) {
-                    const modified = this.responseText.replace(/"isUnavailableForUser":\s*true/g, '"isUnavailableForUser":false');
-                    Object.defineProperty(this, 'responseText', { value: modified });
-                    Object.defineProperty(this, 'response', { value: modified });
-                }
-            }
-        });
-        originalOpen.apply(this, arguments);
-    };
-
-    const sendBtn = document.querySelector('button[data-slot="tooltip-trigger"]');
-    if(sendBtn) {
-        sendBtn.disabled = false;
-        sendBtn.classList.remove('disabled:cursor-not-allowed');
-    }
-}
-
-// --- 4. STEALTH AUTO PROMPTER LOGIC (SINGLE USE) ---
+// --- 4. STEALTH AUTO PROMPTER LOGIC ---
 function tryGMRequest(contentPrompt) {
     return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -274,7 +329,6 @@ async function typeAndSend(text) {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
     let str = "";
 
-    // Fast typing for bot, human for single use
     const speed = botInterval ? 2 : (Math.floor(Math.random() * 10) + 5);
 
     for(let char of text) {
@@ -294,7 +348,7 @@ async function typeAndSend(text) {
     }
 }
 
-// --- 5. BOT HELPERS (FIXED WITH UNSAFEWINDOW) ---
+// --- 5. BOT HELPERS ---
 function getNativeWindow() {
     return (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
 }
@@ -308,12 +362,10 @@ function realClick(el) {
     el.click();
 }
 
-// --- FIXED PUBLIC MODE HANDLER ---
 async function handlePublicMode() {
     const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
     if (!switchBtn) return;
 
-    // Only switch if it's currently private
     if (switchBtn.textContent.includes("Private")) {
         realClick(switchBtn);
         await sleep(600);
@@ -324,7 +376,6 @@ async function handlePublicMode() {
             await sleep(500);
         }
 
-        // More robust Confirm selector
         const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Confirm');
         if (confirmBtn) {
             realClick(confirmBtn);
@@ -356,7 +407,6 @@ async function forceScratchComplete(canvas) {
 }
 
 // --- 6. BOT LOOP ---
-// --- UPDATED BOT LOOP WITH GUARD CLAUSE FOR 2ND LOOP ---
 async function runBotLogic() {
     if (isBotWorking || !botInterval) return;
     isBotWorking = true;
@@ -365,11 +415,9 @@ async function runBotLogic() {
     const setStatus = (txt) => { if(statusEl) statusEl.innerText = txt; };
 
     try {
-        // VOTING / SCRATCH PHASE
         if (botMode === "VOTING" || window.location.search.includes('stream=true')) {
             setStatus("Selecting All & Saving...");
 
-            // 1. Find all tag buttons
             const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
             tags.forEach(tag => {
                 if (tag.getAttribute('data-state') === 'off') {
@@ -377,7 +425,6 @@ async function runBotLogic() {
                 }
             });
 
-            // 2. Find and click the Save/Feedback button
             const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
                 b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
             );
@@ -387,11 +434,11 @@ async function runBotLogic() {
                 setStatus("Feedback Saved.");
             }
 
-            // Handle Scratch Card
             const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
             if (canvas && canvas.offsetParent !== null) {
                 canvas.setAttribute('data-bot-done', 'true');
                 setStatus("Scratching...");
+                await forceScratchComplete(canvas);
                 await forceScratchComplete(canvas);
                 await sleep(500);
 
@@ -400,13 +447,12 @@ async function runBotLogic() {
                 if (sidebarBtn) {
                     realClick(sidebarBtn);
                     setStatus("Loading New Chat...");
-                    await sleep(1500); // Wait for transition
+                    await sleep(1500);
                     botMode = "TEXT";
                 }
                 isBotWorking = false; return;
             }
 
-            // Handle "I prefer this"
             const prefButtons = Array.from(document.querySelectorAll('button')).filter(b =>
                 b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled
             );
@@ -417,32 +463,22 @@ async function runBotLogic() {
             isBotWorking = false; return;
         }
 
-        // TEXT PHASE
         const input = document.querySelector("[data-testid='prompt-input']");
         if (botMode === "TEXT" && input) {
-
-            // --- CRITICAL FIX FOR 2ND LOOP ---
-            // Don't just call handlePublicMode, ensure the switch EXISTS before typing.
-            // If the switch isn't loaded yet, return and try next loop.
             if (botConfig.publicMode) {
                 const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
-
                 if (!switchBtn) {
-                    // Button not loaded yet (New Chat still loading)
                     setStatus("Waiting for UI Switch...");
                     isBotWorking = false;
-                    return; // EXIT and retry next interval
+                    return;
                 }
-
                 if (switchBtn.textContent.includes("Private")) {
                     setStatus("Switching to Public...");
                     await handlePublicMode();
-                    // EXIT and verify state on next loop before typing
                     isBotWorking = false;
                     return;
                 }
             }
-            // --------------------------------
 
             if (input.value.length < 5) {
                 setStatus("Fetching Prompt...");
@@ -453,7 +489,6 @@ async function runBotLogic() {
                 botMode = "VOTING";
             }
         }
-
     } catch(e) {
         console.error("Bot Error", e);
         setStatus("Error: " + e.message);
@@ -463,7 +498,9 @@ async function runBotLogic() {
 
 // --- 7. UI BUILDER ---
 function buildUI() {
+    if (document.getElementById(UI_ID)) return;
     const savedState = getSavedState();
+    const isUnlockActive = localStorage.getItem(UNLOCK_KEY) === 'true';
 
     const style = document.createElement('style');
     style.innerHTML = `
@@ -539,7 +576,7 @@ function buildUI() {
     gui.innerHTML = `
         <div class="y-head">
             <div class="y-title"><div class="y-dot"></div> Yupp Ultimate</div>
-            <div style="font-size:0.7rem; opacity:0.5">v6.2.1</div>
+            <div style="font-size:0.7rem; opacity:0.5">v6.4.0</div>
         </div>
 
         <div class="y-tabs">
@@ -553,9 +590,9 @@ function buildUI() {
         <div class="y-content">
             <div id="tab-main" class="y-page active">
                 <p style="font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7">Tools</p>
-                <button class="y-btn special y-full-btn" id="y-unlock-btn">
+                <button class="y-btn special y-full-btn ${isUnlockActive ? 'on' : ''}" id="y-unlock-btn">
                     <span>Remove Model Bans</span>
-                    <small>FIX</small>
+                    <small>${isUnlockActive ? 'ACTIVE' : 'OFF'}</small>
                 </button>
                 <button class="y-btn bot y-full-btn" id="y-autoprompt-btn">
                     <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>
@@ -603,22 +640,21 @@ function buildUI() {
             <div id="tab-docs" class="y-page">
                 <div class="y-code">
                     <strong>// TECHNICAL DOCUMENTATION</strong><br><br>
-                    <strong>1. Auto-Prompter (Stealth):</strong><br>
+                    <strong>1. Model Unlocker (Reload Mode):</strong><br>
+                    Patches JSON.parse/Fetch/XHR at document-start.<br>
+                    Runs a 20s cleanup loop after reload.<br><br>
+                    <strong>2. Auto-Prompter (Stealth):</strong><br>
                     Uses <code>GM_xmlhttpRequest</code> to bypass CORS.<br>
                     Injects text via React value setter.<br><br>
-                    <strong>2. Network Patching:</strong><br>
-                    MITM attack on JSON responses to remove model bans.<br><br>
                     <strong>3. AutoFarm Bot:</strong><br>
                     - Handles Scratch Card Canvas via PointerEvents.<br>
-                    - Auto-switches to Public Mode if enabled.<br>
-                    - Generates SVG or 4K Picture prompts.
+                    - Auto-switches to Public Mode if enabled.
                 </div>
             </div>
         </div>
     `;
     document.body.appendChild(gui);
 
-    // --- EVENT BINDINGS ---
     const tabBtns = ['main', 'autofarm', 'misc', 'docs', 'system'];
     tabBtns.forEach(name => {
         document.getElementById(`btn-tab-${name}`).addEventListener('click', (e) => {
@@ -631,12 +667,18 @@ function buildUI() {
 
     const unlockBtn = document.getElementById('y-unlock-btn');
     unlockBtn.addEventListener('click', () => {
-        unlockBtn.classList.add('on');
-        applyAvailabilityUnlocker();
-        setTimeout(() => {
+        if (localStorage.getItem(UNLOCK_KEY) === 'true') {
+            localStorage.removeItem(UNLOCK_KEY);
             unlockBtn.classList.remove('on');
-            showNotification('Network Layer Patched');
-        }, 600);
+            unlockBtn.querySelector('small').innerText = "OFF";
+            showNotification('Universal Unlocker Disabled. Reloading...');
+        } else {
+            localStorage.setItem(UNLOCK_KEY, 'true');
+            unlockBtn.classList.add('on');
+            unlockBtn.querySelector('small').innerText = "ACTIVE";
+            showNotification('Unlocker Active. Reloading to apply patches...');
+        }
+        setTimeout(() => location.reload(), 1000);
     });
 
     const autoBtn = document.getElementById('y-autoprompt-btn');
