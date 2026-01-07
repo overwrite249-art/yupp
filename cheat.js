@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Yupp.ai Ultimate GUI (v6.5.6 - Redirect Persistent)
+// @name         Yupp.ai Ultimate GUI (v6.6.1 - Full Optimizer)
 // @namespace    http://tampermonkey.net/
-// @version      6.5.6
-// @description  Bot survives redirects, persistent farming across page changes. Press '[' to open.
+// @version      6.6.1
+// @description  Original GUI with emergency stop keybind and full optimization. Press '[' to open, ']' to emergency stop.
 // @author       You
 // @match        https://yupp.ai/*
 // @connect      api.deepinfra.com
@@ -18,6 +18,7 @@
 
 // --- CONFIGURATION ---
 const TRIGGER_KEY = '[';
+const EMERGENCY_KEY = ']';
 const UI_ID = 'yupp-ultimate-gui';
 const NOTIF_ID = 'yupp-toast-notif';
 const STORAGE_KEY = 'yupp_gui_state_v6';
@@ -26,11 +27,13 @@ const BOT_CONFIG_KEY = 'yupp_bot_config';
 const BOT_RUNNING_KEY = 'yupp_bot_running';
 const BOT_MODE_KEY = 'yupp_bot_mode';
 
+// Heavy element selector (response text containers)
+const HEAVY_ELEMENT_SELECTOR = 'div.relative.w-full.md\\:min-h-\\[max\\(var\\(--bot-message-min-height\\)\\,calc\\(100vh-var\\(--chat-page-vertical-offset\\)-var\\(--minified-prompt-box-height\\)-var\\(--quick-take-height\\,0px\\)\\)\\)\\]';
+
 // --- STATE ---
 let isBuilt = false;
 let isVisible = false;
 let breakAutoPrompt = false;
-let isOptimized = false;
 let optimizeObserver = null;
 
 // --- BOT STATE ---
@@ -108,6 +111,41 @@ const FEATURE_MAP = {
     }
 };
 
+// --- EMERGENCY STOP (Press ']') ---
+function emergencyStop() {
+    console.log('🚨 EMERGENCY STOP TRIGGERED');
+
+    // Stop bot
+    if (botInterval) {
+        clearInterval(botInterval);
+        botInterval = null;
+    }
+    isBotWorking = false;
+
+    // Stop optimizer observer
+    if (optimizeObserver) {
+        optimizeObserver.disconnect();
+        optimizeObserver = null;
+    }
+
+    // Clear all bot state
+    localStorage.removeItem(BOT_RUNNING_KEY);
+    localStorage.removeItem(BOT_MODE_KEY);
+
+    // Disable optimizer
+    botConfig.optimize = false;
+    saveBotConfig();
+
+    // Remove optimizer styles
+    const optStyle = document.getElementById('yupp-optimize-style');
+    if (optStyle) optStyle.remove();
+
+    showNotification('🚨 EMERGENCY STOP! All farming stopped.');
+
+    // Reload after short delay
+    setTimeout(() => location.reload(), 1000);
+}
+
 // --- PERSISTENT STATE MANAGEMENT ---
 function loadBotConfig() {
     try {
@@ -147,49 +185,56 @@ function loadBotMode() {
 // Load config immediately
 loadBotConfig();
 
-// --- SITE OPTIMIZER ---
-const HEAVY_ELEMENT_SELECTOR = 'div.relative.w-full.md\\:min-h-\\[max\\(var\\(--bot-message-min-height\\)\\,calc\\(100vh-var\\(--chat-page-vertical-offset\\)-var\\(--minified-prompt-box-height\\)-var\\(--quick-take-height\\,0px\\)\\)\\)\\]';
-
+// --- SITE OPTIMIZER (FULL VERSION) ---
 function hideHeavyElements() {
     if (!botConfig.optimize) return;
 
+    // Hide heavy message containers (response text)
     try {
         const heavyElements = document.querySelectorAll(HEAVY_ELEMENT_SELECTOR);
         heavyElements.forEach(el => {
             if (el.style.display !== 'none') {
                 el.style.display = 'none';
             }
-        document.querySelector('[data-slot="sidebar-group-content"]').remove();
         });
     } catch(e) {}
 
+    // Hide sidebar content
+    try {
+        const sidebarContent = document.querySelector('[data-slot="sidebar-group-content"]');
+        if (sidebarContent && sidebarContent.style.display !== 'none') {
+            sidebarContent.style.display = 'none';
+        }
+    } catch(e) {}
+
+    // Hide SVGs, images, videos (except in GUI)
     document.querySelectorAll('svg, img, video').forEach(el => {
         if (el.closest('#' + UI_ID) || el.closest('#' + NOTIF_ID)) return;
         if (el.style.display !== 'none') {
-            el.style.setProperty('display', 'none', 'important');
+            el.style.display = 'none';
         }
     });
-    document.querySelector('[data-slot="sidebar-group-content"]').remove();
 }
 
 function killSiteStyles() {
     if (!botConfig.optimize) return;
 
+    // Remove dark mode
     document.documentElement.classList.remove('dark');
     if (document.body) document.body.classList.remove('dark');
     document.documentElement.style.colorScheme = 'light';
-
+    document.querySelector('[data-slot="sidebar-group-content"]').remove();
+    // Disable site stylesheets
     document.querySelectorAll('link[rel="stylesheet"]').forEach(el => {
         if (!el.id || !el.id.includes('yupp')) {
             el.disabled = true;
-            el.remove();
         }
     });
 
+    // Disable site style tags
     document.querySelectorAll('style').forEach(el => {
         if (!el.id || !el.id.includes('yupp')) {
             el.disabled = true;
-            el.remove();
         }
     });
 
@@ -198,10 +243,10 @@ function killSiteStyles() {
 
 function injectOptimizeStyles() {
     if (!botConfig.optimize) return;
-    if (document.getElementById('yupp-optimize-inject')) return;
+    if (document.getElementById('yupp-optimize-style')) return;
 
     const style = document.createElement('style');
-    style.id = 'yupp-optimize-inject';
+    style.id = 'yupp-optimize-style';
     style.textContent = `
         html, body {
             background: #ffffff !important;
@@ -233,10 +278,19 @@ function injectOptimizeStyles() {
             padding: 8px !important;
         }
         a { color: #0066cc !important; }
+
+        /* Hide heavy message containers */
         div.relative.w-full[class*="md:min-h-[max(var(--bot-message-min-height)"] {
             display: none !important;
         }
+
+        /* Hide media */
         svg:not(#${UI_ID} svg), img:not(#${UI_ID} img), video {
+            display: none !important;
+        }
+
+        /* Hide sidebar content */
+        [data-slot="sidebar-group-content"] {
             display: none !important;
         }
     `;
@@ -248,18 +302,19 @@ function injectOptimizeStyles() {
     }
 }
 
-function startPersistentOptimizer() {
+function startOptimizer() {
     if (optimizeObserver) return;
-    isOptimized = true;
 
+    // Initial optimization
     killSiteStyles();
     injectOptimizeStyles();
     hideHeavyElements();
 
+    // Watch for new elements
     optimizeObserver = new MutationObserver(() => {
         if (botConfig.optimize) {
-            killSiteStyles();
             hideHeavyElements();
+            killSiteStyles();
         }
     });
 
@@ -275,7 +330,7 @@ function startPersistentOptimizer() {
         document.addEventListener('DOMContentLoaded', startObserver);
     }
 
-    // Hook history API
+    // Hook into history API for SPA navigation
     const originalPushState = history.pushState;
     history.pushState = function() {
         originalPushState.apply(this, arguments);
@@ -304,7 +359,7 @@ function startPersistentOptimizer() {
         }, 100);
     });
 
-    console.log('⚡ Persistent Optimizer: ACTIVE');
+    console.log('⚡ Optimizer: ON (hiding responses + media)');
 }
 
 function stopOptimizer() {
@@ -312,13 +367,17 @@ function stopOptimizer() {
         optimizeObserver.disconnect();
         optimizeObserver = null;
     }
-    isOptimized = false;
-    botConfig.optimize = false;
-    saveBotConfig();
 
-    const style = document.getElementById('yupp-optimize-inject');
+    const style = document.getElementById('yupp-optimize-style');
     if (style) style.remove();
 
+    // Re-enable disabled stylesheets
+    document.querySelectorAll('link[rel="stylesheet"][disabled], style[disabled]').forEach(el => {
+        el.disabled = false;
+    });
+
+    botConfig.optimize = false;
+    saveBotConfig();
     location.reload();
 }
 
@@ -356,13 +415,12 @@ function openAutoFarmWindow() {
     }
 }
 
-// --- START BOT FUNCTION ---
+// --- BOT FUNCTIONS ---
 function startBot() {
     if (botInterval) return;
 
     botMode = loadBotMode();
 
-    // If we're on a stream page, switch to voting mode
     if (window.location.search.includes('stream=true') || window.location.pathname.includes('/chat/')) {
         botMode = "VOTING";
         saveBotMode("VOTING");
@@ -372,8 +430,6 @@ function startBot() {
     setBotRunning(true);
 
     console.log('🤖 Bot Started, Mode:', botMode);
-
-    // Update UI if built
     updateBotUI(true);
 }
 
@@ -387,7 +443,6 @@ function stopBot() {
     saveBotMode("TEXT");
 
     console.log('🤖 Bot Stopped');
-
     updateBotUI(false);
 }
 
@@ -410,15 +465,19 @@ function updateBotUI(running) {
     }
 
     if (statusEl) {
-        statusEl.innerText = running ? 'Status: Running...' : 'Status: Idle';
+        statusEl.innerText = running ? 'Status: Running... Mode: ' + loadBotMode() : 'Status: Idle';
     }
 }
 
-// --- CRITICAL STARTUP (RUNS IMMEDIATELY) ---
+// --- CRITICAL STARTUP ---
 
-// 1. Start optimizer if it was enabled
+// 1. Start optimizer if enabled
 if (botConfig.optimize) {
-    startPersistentOptimizer();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startOptimizer);
+    } else {
+        startOptimizer();
+    }
 }
 
 // 2. Check URL hash for auto-start
@@ -428,15 +487,18 @@ if (hashParams && hashParams.autofarm === 'on') {
 
     if (hashParams.public === '1') botConfig.publicMode = true;
     if (hashParams.image === '1') botConfig.useImage = true;
-    if (hashParams.optimize === '1' && !isOptimized) {
+    if (hashParams.optimize === '1') {
         botConfig.optimize = true;
-        startPersistentOptimizer();
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', startOptimizer);
+        } else {
+            startOptimizer();
+        }
     }
 
     saveBotConfig();
-    setBotRunning(true); // Mark bot as should-be-running
+    setBotRunning(true);
 
-    // Start when page loads
     const startFromHash = () => {
         startBot();
         showNotification('🤖 AutoFarm started!');
@@ -518,15 +580,20 @@ function runUniversalUnlocker(isLooping) {
     };
 
     if (isLooping) {
+        console.log("🔓 Yupp Unlocker: Starting 20s Clean-up Loop");
         const startTime = Date.now();
         const interval = setInterval(() => {
             if (Date.now() - startTime > 20000) {
                 clearInterval(interval);
+                console.log("🔓 Yupp Unlocker: Loop Finished");
                 return;
             }
-            document.querySelectorAll('button[disabled]').forEach(btn => {
+
+            const disabledBtns = document.querySelectorAll('button[disabled]');
+            disabledBtns.forEach(btn => {
                 if (btn.innerText.includes("Send") || btn.querySelector('svg')) {
                     btn.disabled = false;
+                    btn.classList.remove('disabled:cursor-not-allowed');
                 }
             });
         }, 100);
@@ -535,6 +602,14 @@ function runUniversalUnlocker(isLooping) {
 
 // --- CORE LISTENER ---
 document.addEventListener('keydown', (e) => {
+    // Emergency stop with ]
+    if (e.key === EMERGENCY_KEY) {
+        e.preventDefault();
+        emergencyStop();
+        return;
+    }
+
+    // Normal GUI toggle with [
     if (e.key === TRIGGER_KEY) {
         e.preventDefault();
         if (!isBuilt) {
@@ -564,10 +639,8 @@ function toggleUI() {
         el.style.opacity = '1';
         el.style.transform = 'translate(-50%, -50%) scale(1)';
         el.style.pointerEvents = 'auto';
-        if (!isOptimized) {
-            mainContent.style.transition = 'filter 0.2s ease-out';
-            mainContent.style.filter = 'blur(8px)';
-        }
+        mainContent.style.transition = 'filter 0.2s ease-out';
+        mainContent.style.filter = 'blur(8px)';
     } else {
         el.style.opacity = '0';
         el.style.transform = 'translate(-50%, -45%) scale(0.95)';
@@ -610,7 +683,7 @@ function clearStorage() {
     setTimeout(() => location.reload(), 1000);
 }
 
-// --- STEALTH AUTO PROMPTER ---
+// --- STEALTH AUTO PROMPTER LOGIC ---
 function tryGMRequest(contentPrompt) {
     return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -771,7 +844,7 @@ async function forceScratchComplete(canvas) {
     canvas.click();
 }
 
-// --- BOT LOOP (PERSISTENT) ---
+// --- BOT LOOP ---
 async function runBotLogic() {
     if (isBotWorking || !botInterval) return;
     isBotWorking = true;
@@ -783,7 +856,6 @@ async function runBotLogic() {
     };
 
     try {
-        // Detect if we're on voting/stream page
         const isOnStreamPage = window.location.search.includes('stream=true') || window.location.pathname.includes('/chat/');
 
         if (isOnStreamPage) {
@@ -792,7 +864,6 @@ async function runBotLogic() {
 
             setStatus("Voting Mode - Selecting All...");
 
-            // Click all unselected tags
             const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
             tags.forEach(tag => {
                 if (tag.getAttribute('data-state') === 'off') {
@@ -800,7 +871,6 @@ async function runBotLogic() {
                 }
             });
 
-            // Find and click feedback button
             const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
                 b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
             );
@@ -811,7 +881,6 @@ async function runBotLogic() {
                 await sleep(500);
             }
 
-            // Handle scratch card
             const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
             if (canvas && canvas.offsetParent !== null) {
                 canvas.setAttribute('data-bot-done', 'true');
@@ -820,14 +889,12 @@ async function runBotLogic() {
                 await forceScratchComplete(canvas);
                 await sleep(2000);
 
-                // Go back to home for new chat
                 setStatus("Going to New Chat...");
                 window.location.href = '/';
                 isBotWorking = false;
                 return;
             }
 
-            // Click "I prefer this" buttons
             const prefButtons = Array.from(document.querySelectorAll('button')).filter(b =>
                 b.textContent && b.textContent.toLowerCase().includes('i prefer this') && !b.disabled
             );
@@ -840,13 +907,11 @@ async function runBotLogic() {
             return;
         }
 
-        // TEXT MODE - on home page
         botMode = "TEXT";
         saveBotMode("TEXT");
 
         const input = document.querySelector("[data-testid='prompt-input']");
         if (input) {
-            // Handle public mode switch
             if (botConfig.publicMode) {
                 const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
                 if (switchBtn && switchBtn.textContent.includes("Private")) {
@@ -857,7 +922,6 @@ async function runBotLogic() {
                 }
             }
 
-            // Type and send prompt if input is empty
             if (input.value.length < 5) {
                 setStatus("Fetching Prompt...");
                 const prompt = await fetchStealthPrompt(true);
@@ -866,7 +930,6 @@ async function runBotLogic() {
                 setStatus("Typing...");
                 await typeAndSend(prompt);
 
-                // After sending, save state as voting
                 saveBotMode("VOTING");
                 setStatus("Prompt Sent - Waiting for redirect...");
             }
@@ -880,7 +943,7 @@ async function runBotLogic() {
     isBotWorking = false;
 }
 
-// --- UI BUILDER ---
+// --- UI BUILDER (ORIGINAL v6.4 STYLE) ---
 function buildUI() {
     if (document.getElementById(UI_ID)) return;
     const savedState = getSavedState();
@@ -894,74 +957,74 @@ function buildUI() {
             position: fixed; top: 50%; left: 50%; width: 500px; height: 520px;
             transform: translate(-50%, -45%) scale(0.95); opacity: 0;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-            z-index: 2147483647; pointer-events: none;
-            background: var(--color-surface-300, #1a1a2e);
-            border: 1px solid var(--color-border, #333);
-            border-radius: var(--radius-card, 12px);
-            box-shadow: var(--shadow-surface-l2, 0 25px 50px rgba(0,0,0,0.5));
-            color: var(--color-text-primary, #e0e0e0);
-            font-family: var(--font-inter), system-ui, sans-serif;
+            z-index: 99999; pointer-events: none;
+            background: var(--color-surface-300);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-card);
+            box-shadow: var(--shadow-surface-l2);
+            color: var(--color-text-primary);
+            font-family: var(--font-inter), sans-serif;
             display: flex; flex-direction: column; overflow: hidden;
         }
-        #${UI_ID} .y-head { padding: 16px 20px; border-bottom: 1px solid var(--color-border, #333); display: flex; justify-content: space-between; align-items: center; }
-        #${UI_ID} .y-title { font-size: 1.1rem; font-weight: 600; display: flex; gap: 8px; align-items: center; font-family: var(--font-poly-sans, sans-serif); }
-        #${UI_ID} .y-dot { width: 8px; height: 8px; background: var(--color-brand-orange, #ff6b35); border-radius: 50%; box-shadow: 0 0 8px var(--color-brand-orange, #ff6b35); }
+        .y-head { padding: 16px 20px; border-bottom: 1px solid var(--color-border); display: flex; justify-content: space-between; align-items: center; }
+        .y-title { font-size: 1.1rem; font-weight: 600; display: flex; gap: 8px; align-items: center; font-family: var(--font-poly-sans); }
+        .y-dot { width: 8px; height: 8px; background: var(--color-brand-orange); border-radius: 50%; box-shadow: 0 0 8px var(--color-brand-orange); }
 
-        #${UI_ID} .y-tabs { display: flex; gap: 4px; padding: 8px 16px; background: var(--color-surface-200, #12122a); flex-wrap: wrap; }
-        #${UI_ID} .y-tab-btn {
+        .y-tabs { display: flex; gap: 4px; padding: 8px 16px; background: var(--color-surface-200); flex-wrap: wrap; }
+        .y-tab-btn {
             flex: 1; padding: 8px; border-radius: 6px; border: none; background: transparent;
-            color: var(--color-text-secondary, #888); font-size: 0.85rem; cursor: pointer; transition: 0.2s; min-width: 60px;
+            color: var(--color-text-secondary); font-size: 0.85rem; cursor: pointer; transition: 0.2s; min-width: 60px;
         }
-        #${UI_ID} .y-tab-btn:hover { background: var(--color-element-hover, #252545); color: var(--color-text-primary, #fff); }
-        #${UI_ID} .y-tab-btn.active { background: var(--color-element, #2a2a4a); color: var(--color-text-primary, #fff); font-weight: 600; box-shadow: 0 1px 2px #00000010; }
+        .y-tab-btn:hover { background: var(--color-element-hover); color: var(--color-text-primary); }
+        .y-tab-btn.active { background: var(--color-element); color: var(--color-text-primary); font-weight: 600; box-shadow: 0 1px 2px #00000010; }
 
-        #${UI_ID} .y-content { flex: 1; padding: 16px; overflow-y: auto; position: relative; }
-        #${UI_ID} .y-page { display: none; animation: fadeIn 0.2s; }
-        #${UI_ID} .y-page.active { display: block !important; }
+        .y-content { flex: 1; padding: 16px; overflow-y: auto; position: relative; }
+        .y-page { display: none; animation: fadeIn 0.2s; }
+        .y-page.active { display: block !important; }
 
-        #${UI_ID} .y-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        #${UI_ID} .y-full-btn { width: 100%; margin-bottom: 10px; }
+        .y-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .y-full-btn { width: 100%; margin-bottom: 10px; }
 
-        #${UI_ID} .y-btn {
-            padding: 12px; border-radius: 12px; border: 1px solid var(--color-border, #444);
-            background: var(--color-surface-100, #252540); color: var(--color-text-primary, #e0e0e0);
+        .y-btn {
+            padding: 12px; border-radius: 12px; border: 1px solid var(--color-border);
+            background: var(--color-surface-100); color: var(--color-text-primary);
             font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: all 0.15s;
             text-align: left; display: flex; align-items: center; gap: 8px; position: relative; overflow: hidden;
         }
-        #${UI_ID} .y-btn:hover { background: var(--color-element-hover, #353560); border-color: var(--color-text-secondary, #666); }
-        #${UI_ID} .y-btn.on { background: var(--color-brand-orange, #ff6b35); color: white; border-color: transparent; }
-        #${UI_ID} .y-btn small { opacity: 0.6; font-size: 0.7em; margin-left: auto; }
-        #${UI_ID} .y-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+        .y-btn:hover { background: var(--color-element-hover); border-color: var(--color-text-secondary); }
+        .y-btn.on { background: var(--color-brand-orange); color: white; border-color: transparent; }
+        .y-btn small { opacity: 0.6; font-size: 0.7em; margin-left: auto; }
+        .y-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
 
-        #${UI_ID} .y-btn.special { border: 1px solid var(--color-brand-orange, #ff6b35); background: rgba(255, 165, 0, 0.05); }
-        #${UI_ID} .y-btn.special:hover { background: var(--color-brand-orange, #ff6b35); color: white; }
+        .y-btn.special { border: 1px solid var(--color-brand-orange); background: rgba(255, 165, 0, 0.05); }
+        .y-btn.special:hover { background: var(--color-brand-orange); color: white; }
 
-        #${UI_ID} .y-btn.bot { border: 1px solid #00e5ff; background: rgba(0, 229, 255, 0.05); color: #00e5ff; }
-        #${UI_ID} .y-btn.bot:hover { background: #00e5ff; color: #000; }
+        .y-btn.bot { border: 1px solid #00e5ff; background: rgba(0, 229, 255, 0.05); color: #00e5ff; }
+        .y-btn.bot:hover { background: #00e5ff; color: #000; }
 
-        #${UI_ID} .y-btn.optimize { border: 1px solid #00ff88; background: rgba(0, 255, 136, 0.05); color: #00ff88; }
-        #${UI_ID} .y-btn.optimize:hover { background: #00ff88; color: #000; }
-        #${UI_ID} .y-btn.optimize.on { background: #00ff88; color: #000; }
+        .y-btn.optimize { border: 1px solid #00ff88; background: rgba(0, 255, 136, 0.05); color: #00ff88; }
+        .y-btn.optimize:hover { background: #00ff88; color: #000; }
+        .y-btn.optimize.on { background: #00ff88; color: #000; }
 
-        #${UI_ID} .y-btn.window { border: 1px solid #a855f7; background: rgba(168, 85, 247, 0.05); color: #a855f7; }
-        #${UI_ID} .y-btn.window:hover { background: #a855f7; color: #fff; }
+        .y-btn.window { border: 1px solid #a855f7; background: rgba(168, 85, 247, 0.05); color: #a855f7; }
+        .y-btn.window:hover { background: #a855f7; color: #fff; }
 
-        #${UI_ID} .y-btn.danger { color: var(--color-destructive, #ff4444); border-color: var(--color-destructive, #ff4444); opacity: 0.8; }
-        #${UI_ID} .y-btn.danger:hover { background: var(--color-destructive, #ff4444); color: white; opacity: 1; }
+        .y-btn.danger { color: var(--color-destructive); border-color: var(--color-destructive); opacity: 0.8; }
+        .y-btn.danger:hover { background: var(--color-destructive); color: white; opacity: 1; }
 
-        #${UI_ID} .y-section { font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7; }
-        #${UI_ID} .y-divider { height: 1px; background: var(--color-border, #333); margin: 12px 0; }
-        #${UI_ID} .y-hash-box { margin-top: 8px; padding: 8px; background: var(--color-surface-100, #1a1a2e); border-radius: 6px; border: 1px solid var(--color-border, #333); font-size: 0.7rem; }
-        #${UI_ID} .y-hash-box code { color: #00e5ff; word-break: break-all; font-family: var(--font-mono, monospace); }
+        .y-bot-status { margin-top: 10px; font-size: 0.75rem; text-align: center; color: var(--color-text-secondary); font-family: var(--font-mono); }
+        .y-code { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-secondary); line-height: 1.5; background: var(--color-surface-100); padding: 10px; border-radius: 8px; border: 1px solid var(--color-border); }
 
-        #${UI_ID} .y-bot-status { margin-top: 10px; font-size: 0.75rem; text-align: center; color: var(--color-text-secondary, #888); font-family: var(--font-mono, monospace); padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; }
-        #${UI_ID} .y-code { font-family: var(--font-mono, monospace); font-size: 0.75rem; color: var(--color-text-secondary, #888); line-height: 1.5; background: var(--color-surface-100, #1a1a2e); padding: 10px; border-radius: 8px; border: 1px solid var(--color-border, #333); }
+        .y-section { font-size: 0.8rem; margin-bottom: 12px; opacity: 0.7; }
+        .y-divider { height: 1px; background: var(--color-border); margin: 12px 0; }
+        .y-hash-box { margin-top: 8px; padding: 8px; background: var(--color-surface-100); border-radius: 6px; border: 1px solid var(--color-border); font-size: 0.7rem; }
+        .y-hash-box code { color: #00e5ff; word-break: break-all; font-family: var(--font-mono); }
 
         #${NOTIF_ID} {
             position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(20px);
             background: #111; color: #fff; padding: 10px 20px; border-radius: 30px;
-            font-size: 0.9rem; pointer-events: none; opacity: 0; transition: all 0.3s; z-index: 2147483647;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.3); border: 1px solid #333; font-family: var(--font-inter, sans-serif);
+            font-size: 0.9rem; pointer-events: none; opacity: 0; transition: all 0.3s; z-index: 100000;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3); border: 1px solid #333; font-family: var(--font-inter);
         }
         #${NOTIF_ID}.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -974,7 +1037,7 @@ function buildUI() {
     gui.innerHTML = `
         <div class="y-head">
             <div class="y-title"><div class="y-dot"></div> Yupp Ultimate</div>
-            <div style="font-size:0.7rem; opacity:0.5">v6.5.6</div>
+            <div style="font-size:0.7rem; opacity:0.5">v6.6.1 | Press ] to stop</div>
         </div>
 
         <div class="y-tabs">
@@ -1000,7 +1063,7 @@ function buildUI() {
             </div>
 
             <div id="tab-autofarm" class="y-page">
-                <p class="y-section">AFK Farming</p>
+                <p class="y-section">AFK Farming (Press ] to emergency stop)</p>
                 <div class="y-grid">
                     <button class="y-btn ${botConfig.publicMode ? 'on' : ''}" id="y-bot-public">
                         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
@@ -1016,7 +1079,7 @@ function buildUI() {
                 <div style="margin-top: 10px;">
                     <button class="y-btn optimize y-full-btn ${botConfig.optimize ? 'on' : ''}" id="y-optimize-btn">
                         <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                        <span>Optimize Site (by a lot)</span>
+                        <span>Optimize Site (hides responses)</span>
                         <small>${botConfig.optimize ? 'ACTIVE' : 'OFF'}</small>
                     </button>
                     <button class="y-btn bot y-full-btn ${isBotActive ? 'on' : ''}" id="y-bot-start">
@@ -1042,27 +1105,30 @@ function buildUI() {
             </div>
 
             <div id="tab-system" class="y-page">
+                <p class="y-section">Emergency: Press ] key to stop everything</p>
                 <div class="y-grid">
                     <button class="y-btn" id="y-reload-btn">Force Reload</button>
                     <button class="y-btn danger" id="y-reset-btn">Reset Config</button>
                     <button class="y-btn" id="y-copy-hash-btn">Copy Farm URL</button>
+                    <button class="y-btn danger" id="y-emergency-btn">🚨 Emergency Stop</button>
                 </div>
             </div>
 
             <div id="tab-docs" class="y-page">
                 <div class="y-code">
-                    <strong>// v6.5.6 - REDIRECT PERSISTENT</strong><br><br>
-                    <strong>✨ What's New:</strong><br>
-                    • Bot survives page redirects<br>
-                    • Auto-resumes after navigation<br>
-                    • State saved in localStorage<br><br>
-                    <strong>🔄 How it works:</strong><br>
-                    1. Start bot on home page<br>
-                    2. Bot sends prompt<br>
-                    3. Site redirects to /chat/...<br>
-                    4. Bot auto-resumes voting<br>
-                    5. After scratch, goes home<br>
-                    6. Repeat forever!
+                    <strong>// DOCUMENTATION v6.6.1</strong><br><br>
+                    <strong>🚨 EMERGENCY STOP:</strong><br>
+                    Press <strong>]</strong> key anytime to stop!<br><br>
+                    <strong>⚡ Optimizer:</strong><br>
+                    - Hides response text containers<br>
+                    - Removes CSS, SVGs, images<br>
+                    - Hides sidebar content<br>
+                    - Removes animations<br><br>
+                    <strong>🤖 AutoFarm Bot:</strong><br>
+                    - Survives page redirects<br>
+                    - Auto-resumes after navigation<br><br>
+                    <strong>🪟 Multi-Window:</strong><br>
+                    <code>#autofarm=on,optimize=1</code>
                 </div>
             </div>
         </div>
@@ -1115,6 +1181,7 @@ function buildUI() {
                 await typeAndSend(prompt);
             }
         } catch (e) {
+            console.error(e);
             showNotification('Error generating prompt');
         } finally {
             this.classList.remove('on');
@@ -1147,8 +1214,8 @@ function buildUI() {
         updateHashPreview();
 
         if (botConfig.optimize) {
-            startPersistentOptimizer();
-            showNotification('⚡ Optimizer Enabled!');
+            startOptimizer();
+            showNotification('⚡ Optimizer Enabled! Hiding responses...');
         } else {
             stopOptimizer();
         }
@@ -1176,6 +1243,9 @@ function buildUI() {
         });
     };
 
+    // Emergency stop button
+    document.getElementById('y-emergency-btn').onclick = emergencyStop;
+
     // Misc features grid
     const grid = document.getElementById('y-misc-grid');
     Object.keys(FEATURE_MAP).forEach(key => {
@@ -1201,5 +1271,9 @@ function buildUI() {
 
     isBuilt = true;
 }
+
+// Expose to console
+window.yuppStop = emergencyStop;
+console.log('💡 Yupp GUI v6.6.1: Press [ to open, ] to emergency stop, or yuppStop() in console');
 
 })();
