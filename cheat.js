@@ -864,23 +864,6 @@ async function runBotLogic() {
 
             setStatus("Voting Mode - Selecting All...");
 
-            const tags = Array.from(document.querySelectorAll('button[data-radix-collection-item]'));
-            tags.forEach(tag => {
-                if (tag.getAttribute('data-state') === 'off') {
-                    realClick(tag);
-                }
-            });
-
-            const fbBtn = Array.from(document.querySelectorAll('button')).find(b =>
-                b.textContent.includes("Send feedback") || b.textContent.includes("Save feedback")
-            );
-
-            if (fbBtn && !fbBtn.disabled) {
-                realClick(fbBtn);
-                setStatus("Feedback Saved.");
-                await sleep(500);
-            }
-
             const canvas = document.querySelector('canvas[data-testid="new-scratch-card"]:not([data-bot-done])');
             if (canvas && canvas.offsetParent !== null) {
                 canvas.setAttribute('data-bot-done', 'true');
