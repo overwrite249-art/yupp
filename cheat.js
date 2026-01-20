@@ -802,20 +802,32 @@ function realClick(el) {
 }
 
 async function handlePublicMode() {
+    // 1. Find the switch using the data-testid from your JSON
     const switchBtn = document.querySelector('[data-testid="public-private-switch"]');
     if (!switchBtn) return;
 
-    if (switchBtn.textContent.includes("Private")) {
+    // Check if we are currently in Private mode
+    // (Note: aria-label or textContent might change based on the UI state)
+    if (switchBtn.textContent.includes("Private") || switchBtn.getAttribute('aria-label') === 'Private') {
         realClick(switchBtn);
         await sleep(600);
 
-        const publicRadio = Array.from(document.querySelectorAll('button[role="radio"]')).find(b => b.getAttribute('aria-label') === 'Public');
-        if (publicRadio) {
-            realClick(publicRadio);
+        // 2. Updated Public Radio Selector
+        // The JSON suggests looking for aria/Public or a specific div structure
+        const publicOption = document.querySelector('[aria-label="Public"]') ||
+                             Array.from(document.querySelectorAll('div')).find(el => el.textContent === 'Public');
+
+        if (publicOption) {
+            realClick(publicOption);
             await sleep(500);
         }
 
-        const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Confirm');
+        // 3. Updated Confirm Button Selector
+        // The JSON uses "aria/Confirm" and specific button nesting
+        const confirmBtn = Array.from(document.querySelectorAll('button')).find(b =>
+            b.textContent.trim() === 'Confirm' || b.getAttribute('aria-label') === 'Confirm'
+        );
+
         if (confirmBtn) {
             realClick(confirmBtn);
             await sleep(800);
